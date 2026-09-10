@@ -64,3 +64,61 @@ def test_scheduler_silences_submitted_tasks(tmp_path: Path):
     scheduler = DDLScheduler(mgr)
     events = scheduler.evaluate_deadlines(now=now)
     assert len(events) == 0
+
+
+def test_scheduler_silences_tasks_with_submitted_labels_or_grades(tmp_path: Path):
+    state_file = tmp_path / "state.json"
+    mgr = DaemonStateManager(state_file)
+
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    due_dt = now + timedelta(minutes=30)
+    due_str = due_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Task has NO 'status' field, but has 'Submitted' in labels and grade_score
+    mgr.update_task(
+        {
+            "id": "27537541",
+            "title": "Homework of summer holiday",
+            "due_date": due_str,
+            "labels": ["Formative", "Homework", "Submitted"],
+            "grade_score": "Submitted",
+        }
+    )
+
+    scheduler = DDLScheduler(mgr)
+    events = scheduler.evaluate_deadlines(now=now)
+    assert len(events) == 0
+
+
+def test_scheduler_extracts_class_id_from_link_for_live_check(tmp_path: Path):
+    state_file = tmp_path / "state.json"
+    mgr = DaemonStateManager(state_file)
+
+    now = datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc)
+    due_dt = now + timedelta(minutes=30)
+    due_str = due_dt.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Task has NO class_id field, but has class_id in link
+    mgr.update_task(
+        {
+            "id": "27538237",
+            "title": "Poster",
+            "link": "https://beijing101.managebac.cn/student/classes/11516095/core_tasks/27538237",
+            "due_date": due_str,
+            "labels": ["Formative", "Pending"],
+        }
+    )
+
+    checked_calls = []
+
+    def mock_checker(class_id: str, task_id: str) -> bool:
+        checked_calls.append((class_id, task_id))
+        return True  # student submitted live
+
+    scheduler = DDLScheduler(mgr, submission_checker=mock_checker)
+    events = scheduler.evaluate_deadlines(now=now)
+
+    assert len(events) == 0  # silenced!
+    assert checked_calls == [("11516095", "27538237")]
+    assert mgr.get_task("27538237")["status"] == "submitted"
+
